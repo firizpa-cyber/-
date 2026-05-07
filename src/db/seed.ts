@@ -24,12 +24,6 @@ export const PRESETS = [
     name: 'Англисӣ-Тоҷикӣ', 
     url: 'https://raw.githubusercontent.com/skat-it/english-tajik-dictionary/master/dictionary.csv',
     pair: 'en-tg'
-  },
-  { 
-    id: 'tg-fa-general',
-    name: 'Тоҷикӣ-Форсӣ', 
-    url: 'https://raw.githubusercontent.com/skat-it/tajik-persian-dictionary/master/dictionary.csv',
-    pair: 'tg-fa'
   }
 ];
 
