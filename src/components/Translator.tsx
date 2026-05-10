@@ -1,111 +1,272 @@
-import React, { useState } from 'react';
-import { Languages, ArrowRightLeft, Copy, Volume2, Loader2 } from 'lucide-react';
-import { translateText } from '@/src/services/ai';
+import React, { useState, useRef } from 'react';
+import { Languages, ArrowRightLeft, Copy, Check, Sparkles, BookOpen, Quote, Info, ChevronDown, ChevronUp, Loader2, Volume2, Mic, MicOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { translateText, advancedAIAnalysis } from '@/src/services/ai';
+import { cn } from '@/src/lib/utils';
 
 export default function Translator() {
-  const [sourceText, setSourceText] = useState('');
+  const [inputText, setInputText] = useState('');
   const [translatedText, setTranslatedText] = useState('');
-  const [isTranslating, setIsTranslating] = useState(false);
-  const [langs, setLangs] = useState({ from: 'Тоҷикӣ', to: 'Англисӣ' });
+  const [analysis, setAnalysis] = useState<any>(null);
+  const [sourceLang, setSourceLang] = useState('Тоҷикӣ');
+  const [targetLang, setTargetLang] = useState('English');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
+  const [showAnalysis, setShowAnalysis] = useState(false);
+  const [isListening, setIsListening] = useState(false);
 
-  const swapLangs = () => {
-    setLangs({ from: langs.to, to: langs.from });
-    setSourceText(translatedText);
-    setTranslatedText(sourceText);
+  const recognitionRef = useRef<any>(null);
+
+  const availableLangs = [
+    'Тоҷикӣ', 'English', 'Русский', 'Deutsch', 'Français', 'Türkçe', 'العربية', 'Ўзбекча', '中文', '日本語'
+  ];
+
+  const setupRecognition = () => {
+    const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = sourceLang === 'Тоҷикӣ' ? 'tg-TJ' : 'en-US'; // basic logic, can be improved
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        setInputText(transcript);
+        setIsListening(false);
+      };
+
+      recognition.onerror = () => setIsListening(false);
+      recognition.onend = () => setIsListening(false);
+      recognitionRef.current = recognition;
+    }
+  };
+
+  const toggleListen = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+    } else {
+      if (!recognitionRef.current) setupRecognition();
+      setIsListening(true);
+      recognitionRef.current?.start();
+    }
   };
 
   const handleTranslate = async () => {
-    if (!sourceText.trim()) return;
-    setIsTranslating(true);
-    const result = await translateText(sourceText, langs.from, langs.to);
-    setTranslatedText(result);
-    setIsTranslating(false);
+    if (!inputText.trim()) return;
+    setIsLoading(true);
+    setAnalysis(null);
+    setShowAnalysis(false);
+    
+    try {
+      const basicResult = await translateText(inputText, sourceLang, targetLang);
+      setTranslatedText(basicResult);
+
+      const aiResult = await advancedAIAnalysis(inputText, sourceLang, targetLang);
+      if (aiResult) {
+        setAnalysis(aiResult);
+        if (aiResult.translation) setTranslatedText(aiResult.translation);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
+  const swapLanguages = () => {
+    setSourceLang(targetLang);
+    setTargetLang(sourceLang);
+    setInputText(translatedText);
+    setTranslatedText(inputText);
+  };
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(translatedText);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2000);
+  };
+
+  const speak = (text: string) => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    window.speechSynthesis.speak(utterance);
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-50">
-      <header className="bg-white px-6 py-6 border-b border-slate-200 flex justify-between items-end shrink-0 mb-6">
+    <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-950 transition-colors">
+      <header className="glass-header px-6 py-6 flex justify-between items-end shrink-0 mb-6 transition-colors">
         <div>
-          <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
-            <Languages className="text-emerald-600" /> Тарҷумони ИИ
+          <h1 className="text-3xl font-serif font-black text-slate-900 dark:text-white tracking-tight flex items-center gap-3">
+             <div className="w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-emerald-500/30">
+               <Languages size={20} />
+             </div>
+             Хирад
           </h1>
-          <p className="text-slate-500 text-xs mt-1">Тарҷумаи фаврӣ бо кӯмаки Gemini</p>
+          <p className="text-slate-500 dark:text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mt-2 ml-1">Интеллектуалӣ</p>
         </div>
       </header>
 
-      <div className="px-6 space-y-6">
-        {/* Language Selection */}
-        <div className="bg-white rounded-2xl shadow-sm p-4 flex items-center justify-between border border-slate-200">
-          <span className="font-bold text-slate-900 w-1/3 text-center">{langs.from}</span>
-          <button 
-            onClick={swapLangs}
-            className="p-3 bg-slate-50 rounded-full hover:bg-emerald-50 transition-all text-emerald-600 border border-slate-100"
-          >
-            <ArrowRightLeft size={20} />
-          </button>
-          <span className="font-bold text-slate-900 w-1/3 text-center">{langs.to}</span>
-        </div>
-
-        {/* Source Input */}
-        <div className="bg-white rounded-[24px] shadow-sm overflow-hidden border border-slate-200 focus-within:border-emerald-500 transition-colors">
-          <textarea
-            className="w-full p-6 h-40 outline-none resize-none text-lg text-slate-800 placeholder:text-slate-300 font-medium"
-            placeholder="Матнро ворид кунед..."
-            value={sourceText}
-            onChange={(e) => setSourceText(e.target.value)}
-          />
-          <div className="flex justify-between items-center p-4 bg-slate-50/50 border-t border-slate-100">
-            <button className="p-3 text-slate-400 hover:text-emerald-600 transition-colors hover:bg-white rounded-xl">
-              <Volume2 size={24} />
-            </button>
-            <button
-              onClick={handleTranslate}
-              disabled={isTranslating || !sourceText}
-              className="bg-emerald-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-600/20 transition-all flex items-center gap-2 disabled:opacity-50"
+      <div className="flex-1 overflow-y-auto no-scrollbar pb-24">
+        <div className="px-6 space-y-6">
+          {/* Language Selector */}
+          <div className="flex items-center gap-3 glass-card p-2 rounded-[24px] transition-all focus-within:shadow-xl dark:shadow-none">
+            <select 
+              value={sourceLang}
+              onChange={(e) => setSourceLang(e.target.value)}
+              className="flex-1 bg-transparent py-3 px-4 font-bold text-slate-700 dark:text-slate-200 outline-none appearance-none cursor-pointer text-[16px] desktop:text-sm"
             >
-              {isTranslating ? <Loader2 className="animate-spin" size={20} /> : 'Тарҷума'}
+              {availableLangs.map(l => <option key={l} value={l} className="dark:bg-slate-900">{l}</option>)}
+            </select>
+            
+            <button 
+              onClick={swapLanguages}
+              className="w-10 h-10 bg-slate-900 dark:bg-emerald-600 text-white rounded-full flex items-center justify-center shadow-lg active:rotate-180 transition-all duration-500"
+            >
+              <ArrowRightLeft size={18} />
             </button>
+
+            <select 
+              value={targetLang}
+              onChange={(e) => setTargetLang(e.target.value)}
+              className="flex-1 bg-transparent py-3 px-4 font-bold text-slate-700 dark:text-slate-200 outline-none appearance-none cursor-pointer text-[16px] desktop:text-sm text-right"
+            >
+              {availableLangs.map(l => <option key={l} value={l} className="dark:bg-slate-900">{l}</option>)}
+            </select>
           </div>
-        </div>
 
-        {/* Output */}
-        <AnimatePresence>
-          {translatedText && (
-            <motion.div 
-              initial={{ height: 0, opacity: 0, y: 20 }}
-              animate={{ height: 'auto', opacity: 1, y: 0 }}
-              exit={{ height: 0, opacity: 0, scale: 0.95 }}
-              className="bg-emerald-600 rounded-[24px] shadow-xl shadow-emerald-900/10 overflow-hidden text-white"
-            >
-              <div className="p-6 min-h-[120px] text-xl font-medium leading-relaxed">
-                {translatedText}
-              </div>
-              <div className="flex justify-end gap-2 p-4 bg-black/10">
-                <button 
-                  onClick={() => copyToClipboard(translatedText)}
-                  className="p-3 hover:bg-white/10 rounded-xl transition-all"
-                >
-                  <Copy size={20} />
-                </button>
-                <button className="p-3 hover:bg-white/10 rounded-xl transition-all">
-                  <Volume2 size={20} />
-                </button>
-              </div>
-            </motion.div>
+          {/* Input Box */}
+          <div className="relative">
+            <textarea
+              className="w-full min-h-[180px] glass-card rounded-[32px] p-8 text-[16px] desktop:text-lg font-medium text-slate-900 dark:text-white outline-none transition-all focus:ring-4 focus:ring-emerald-500/10 placeholder:text-slate-300 dark:placeholder:text-slate-600 no-scrollbar"
+              placeholder={isListening ? "Лутфан гап занед..." : "Матнро ворид кунед..."}
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+            />
+            
+            <div className="absolute bottom-6 left-6 flex gap-2">
+               <button 
+                 onClick={toggleListen}
+                 className={cn(
+                   "p-3 rounded-2xl transition-all shadow-lg",
+                   isListening ? "bg-red-500 text-white animate-pulse" : "bg-white dark:bg-slate-800 text-slate-400 dark:text-slate-500 hover:text-slate-900 dark:hover:text-white border border-slate-100 dark:border-slate-700"
+                 )}
+               >
+                 {isListening ? <MicOff size={20} /> : <Mic size={20} />}
+               </button>
+            </div>
+
+            {inputText && (
+               <button 
+                 onClick={handleTranslate}
+                 disabled={isLoading}
+                 className="absolute bottom-6 right-6 px-6 py-3 bg-slate-900 dark:bg-emerald-600 text-white rounded-2xl font-bold flex items-center gap-2 shadow-xl hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
+               >
+                 {isLoading ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
+                 {isLoading ? 'Фикр мекунам...' : 'Тарҷума'}
+               </button>
+            )}
+          </div>
+
+          {/* Result Box */}
+          <AnimatePresence>
+            {translatedText && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                className="bg-emerald-600 rounded-[32px] p-8 text-white shadow-2xl shadow-emerald-600/30 relative group overflow-hidden"
+              >
+                <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
+                   <Languages size={140} />
+                </div>
+                
+                <div className="relative z-10">
+                  <header className="flex justify-between items-center mb-6">
+                    <span className="text-[10px] font-black uppercase tracking-widest bg-white/20 px-3 py-1 rounded-full">
+                       Натиҷаи Хирад
+                    </span>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => speak(translatedText)}
+                        className="p-2.5 bg-white/20 rounded-xl hover:bg-white/30 transition-all"
+                      >
+                        <Volume2 size={18} />
+                      </button>
+                      <button 
+                        onClick={handleCopy}
+                        className="p-2.5 bg-white/20 rounded-xl hover:bg-white/30 transition-all"
+                      >
+                        {isCopied ? <Check size={18} /> : <Copy size={18} />}
+                      </button>
+                    </div>
+                  </header>
+                  
+                  <p className="text-xl font-bold leading-relaxed mb-6">
+                    {translatedText}
+                  </p>
+
+                  {analysis && (
+                    <div className={cn(
+                      "overflow-hidden transition-all duration-500",
+                      showAnalysis ? "max-h-[1000px] opacity-100" : "max-h-0 opacity-0"
+                    )}>
+                      <div className="pt-6 border-t border-white/20 space-y-6">
+                        {analysis.explanation && (
+                          <div>
+                            <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-2 flex items-center gap-2">
+                              <Info size={12} /> Шарҳи Забонӣ
+                            </p>
+                            <p className="text-sm opacity-90 leading-relaxed font-medium">{analysis.explanation}</p>
+                          </div>
+                        )}
+                        
+                        {analysis.examples && analysis.examples.length > 0 && (
+                          <div>
+                            <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-3 flex items-center gap-2">
+                              <Quote size={12} /> Намунаҳои истифода
+                            </p>
+                            <div className="grid gap-2">
+                              {analysis.examples.map((ex: string, i: number) => (
+                                <div key={i} className="bg-white/10 p-4 rounded-xl text-xs font-bold italic border border-white/5">
+                                  "{ex}"
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {analysis.culturalContext && (
+                          <div className="bg-emerald-900/30 p-5 rounded-[24px] border border-white/10">
+                            <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-2 flex items-center gap-2 text-emerald-200">
+                              <BookOpen size={12} /> Контексти Фарҳангӣ
+                            </p>
+                            <p className="text-xs opacity-90 italic leading-relaxed">{analysis.culturalContext}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <button 
+                    onClick={() => setShowAnalysis(!showAnalysis)}
+                    className="w-full mt-4 flex items-center justify-center gap-2 py-4 bg-white/10 rounded-[20px] text-[10px] font-black uppercase tracking-widest hover:bg-white/20 transition-all border border-white/5"
+                  >
+                    {showAnalysis ? (
+                      <>Пӯшидани таҳлил <ChevronUp size={14} /></>
+                    ) : (
+                      <>Таҳлили хирадмандона <ChevronDown size={14} /></>
+                    )}
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {!translatedText && !isLoading && (
+            <div className="py-20 text-center opacity-20 transform hover:scale-110 transition-transform duration-700">
+              <Languages size={140} className="mx-auto" />
+            </div>
           )}
-        </AnimatePresence>
-      </div>
-
-      {!translatedText && (
-        <div className="p-12 text-center text-slate-200 mt-auto opacity-20">
-          <Languages size={140} className="mx-auto" />
         </div>
-      )}
+      </div>
     </div>
   );
 }
