@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import { HfInference } from "@huggingface/inference";
 import { createServer as createViteServer } from "vite";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -13,28 +12,51 @@ async function startServer() {
 
   app.use(express.json());
 
-  // AI Service logic on backend
-  let hfInstance: HfInference | null = null;
-  function getHF() {
-    if (!hfInstance) {
-      const apiKey = process.env.HUGGING_FACE_API_KEY;
-      if (!apiKey) throw new Error("HUGGING_FACE_API_KEY is not set.");
-      hfInstance = new HfInference(apiKey);
+  // OpenRouter API helper
+  async function callOpenRouter(messages: any[], model: string, systemPrompt?: string) {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set.");
+
+    const payload: any = {
+      model,
+      messages,
+      temperature: 0.7,
+      max_tokens: 1500,
+    };
+
+    if (systemPrompt) {
+      payload.system = systemPrompt;
     }
-    return hfInstance;
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": "http://localhost:3000",
+        "X-Title": "Language Assistant"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OpenRouter error: ${response.status} - ${error}`);
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
   }
 
   // API Routes
   app.post("/api/ai/translate", async (req, res) => {
     try {
       const { text, from, to } = req.body;
-      const hf = getHF();
-      const result = await hf.translation({
-        model: "Helsinki-NLP/opus-mt-mul-en",
-        inputs: text
-      });
-      const translatedText = Array.isArray(result) ? result[0].translation_text : result.translation_text;
-      res.json({ text: translatedText });
+      const response = await callOpenRouter(
+        [{ role: "user", content: `Translate from ${from} to ${to}: "${text}". Provide only the translation.` }],
+        "meta-llama/llama-2-70b-chat"
+      );
+      res.json({ text: response });
     } catch (error) {
       console.error("Server Translation Error:", error);
       res.status(500).json({ text: "Хатогӣ дар тарҷума", error: String(error) });
@@ -44,8 +66,6 @@ async function startServer() {
   app.post("/api/ai/analysis", async (req, res) => {
     try {
       const { text, from, to } = req.body;
-      const hf = getHF();
-      
       const prompt = `You are a language expert. Translate and analyze deeply.
 Translate from ${from} to ${to}: "${text}"
 Provide JSON response with:
@@ -55,23 +75,17 @@ Provide JSON response with:
 - synonyms: synonyms (array, max 3)
 - culturalContext: cultural notes (string)
 
-Return ONLY valid JSON, no extra text. No markdown formatting.`;
+Return ONLY valid JSON, no markdown, no explanation text before or after.`;
 
-      const result = await hf.textGeneration({
-        model: "mistralai/Mistral-7B-Instruct-v0.1",
-        inputs: prompt,
-        parameters: {
-          max_new_tokens: 500,
-          temperature: 0.5,
-          top_p: 0.9
-        }
-      });
+      const response = await callOpenRouter(
+        [{ role: "user", content: prompt }],
+        "meta-llama/llama-2-70b-chat"
+      );
 
-      const content = result.generated_text.replace(prompt, "").trim();
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
       const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {
-        translation: content.substring(0, 100),
-        explanation: "Analysis provided",
+        translation: text,
+        explanation: response,
         examples: [],
         synonyms: [],
         culturalContext: ""
@@ -92,32 +106,22 @@ Return ONLY valid JSON, no extra text. No markdown formatting.`;
   app.post("/api/ai/assistant", async (req, res) => {
     try {
       const { message, history } = req.body;
-      const hf = getHF();
 
-      const conversationText = history.map((h: any) => {
-        const content = h.content || h.parts?.[0]?.text || '';
-        const role = h.role === 'model' || h.role === 'assistant' ? 'Assistant' : 'User';
-        return `${role}: ${content}`;
-      }).join('\n');
+      const messages = history.map((h: any) => ({
+        role: h.role === 'model' || h.role === 'assistant' ? 'assistant' : 'user' as const,
+        content: h.content || h.parts?.[0]?.text || ''
+      }));
+      messages.push({ role: 'user' as const, content: message });
 
-      const prompt = `You are "Хирад" - an extremely intelligent, thoughtful AI assistant specializing in languages and linguistics. You think deeply, provide accurate analysis, and explain complex concepts clearly. Respond in Tajik when appropriate.
+      const systemPrompt = `You are "Хирад" - an extremely intelligent, thoughtful AI assistant specializing in languages and linguistics. You think deeply, provide accurate analysis, and explain complex concepts clearly. Respond in Tajik when appropriate. Be concise but thorough.`;
 
-${conversationText}
-User: ${message}
-Assistant:`;
+      const response = await callOpenRouter(
+        messages as any[],
+        "meta-llama/llama-2-70b-chat",
+        systemPrompt
+      );
 
-      const result = await hf.textGeneration({
-        model: "mistralai/Mistral-7B-Instruct-v0.1",
-        inputs: prompt,
-        parameters: {
-          max_new_tokens: 800,
-          temperature: 0.7,
-          top_p: 0.95
-        }
-      });
-
-      const content = result.generated_text.split('Assistant:').pop()?.trim() || "Бубахшед, ман ҷавоб дода натавонистам.";
-      res.json({ text: content });
+      res.json({ text: response });
     } catch (error) {
       console.error("Server Assistant Error:", error);
       res.status(500).json({ text: "Бубахшед, мушкили техникӣ пеш омад.", error: String(error) });
@@ -127,22 +131,16 @@ Assistant:`;
   app.post("/api/ai/morphology", async (req, res) => {
     try {
       const { word } = req.body;
-      const hf = getHF();
       const prompt = `Analyze the Tajik word: "${word}". 
 Return JSON with: root, suffixes, base, part_of_speech, meaning.
-Return ONLY valid JSON, no markdown.`;
+Return ONLY valid JSON.`;
 
-      const result = await hf.textGeneration({
-        model: "mistralai/Mistral-7B-Instruct-v0.1",
-        inputs: prompt,
-        parameters: {
-          max_new_tokens: 300,
-          temperature: 0.3
-        }
-      });
-      
-      const content = result.generated_text.replace(prompt, "").trim();
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const response = await callOpenRouter(
+        [{ role: "user", content: prompt }],
+        "meta-llama/llama-2-70b-chat"
+      );
+
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
       const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
       res.json(parsed);
     } catch (error) { 
@@ -154,22 +152,16 @@ Return ONLY valid JSON, no markdown.`;
   app.post("/api/ai/spelling", async (req, res) => {
     try {
       const { text } = req.body;
-      const hf = getHF();
       const prompt = `Check spelling and grammar for this Tajik text: "${text}".
 Return JSON with: errors (array of {word, correction, reason}), score (0-100).
-Return ONLY valid JSON, no markdown.`;
+Return ONLY valid JSON.`;
 
-      const result = await hf.textGeneration({
-        model: "mistralai/Mistral-7B-Instruct-v0.1",
-        inputs: prompt,
-        parameters: {
-          max_new_tokens: 400,
-          temperature: 0.2
-        }
-      });
-      
-      const content = result.generated_text.replace(prompt, "").trim();
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const response = await callOpenRouter(
+        [{ role: "user", content: prompt }],
+        "meta-llama/llama-2-70b-chat"
+      );
+
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
       const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { errors: [], score: 100 };
       res.json(parsed);
     } catch (error) { 
@@ -181,23 +173,17 @@ Return ONLY valid JSON, no markdown.`;
   app.post("/api/ai/parse-dict", async (req, res) => {
     try {
       const { sources } = req.body;
-      const hf = getHF();
       const context = sources.map((s:any) => `FILE: ${s.name}\nCONTENT:\n${s.content.substring(0, 3000)}`).join('\n\n');
       const prompt = `Extract dictionary entries from these files:\n${context}
 Return JSON with: entries (array of {word, definition, examples, pos}).
-Return ONLY valid JSON, no markdown.`;
+Return ONLY valid JSON.`;
 
-      const result = await hf.textGeneration({
-        model: "mistralai/Mistral-7B-Instruct-v0.1",
-        inputs: prompt,
-        parameters: {
-          max_new_tokens: 1000,
-          temperature: 0.3
-        }
-      });
-      
-      const content = result.generated_text.replace(prompt, "").trim();
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const response = await callOpenRouter(
+        [{ role: "user", content: prompt }],
+        "meta-llama/llama-2-70b-chat"
+      );
+
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
       const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { entries: [] };
       res.json(parsed);
     } catch (error) { 
@@ -209,22 +195,16 @@ Return ONLY valid JSON, no markdown.`;
   app.post("/api/ai/academic", async (req, res) => {
     try {
       const { word } = req.body;
-      const hf = getHF();
       const prompt = `Find academic definition for Tajik word: "${word}".
 Return JSON with: definition, etymology, examples (array, max 2), synonyms (array, max 3), source.
-Return ONLY valid JSON, no markdown.`;
+Return ONLY valid JSON.`;
 
-      const result = await hf.textGeneration({
-        model: "mistralai/Mistral-7B-Instruct-v0.1",
-        inputs: prompt,
-        parameters: {
-          max_new_tokens: 600,
-          temperature: 0.4
-        }
-      });
-      
-      const content = result.generated_text.replace(prompt, "").trim();
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const response = await callOpenRouter(
+        [{ role: "user", content: prompt }],
+        "meta-llama/llama-2-70b-chat"
+      );
+
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
       const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
       res.json(parsed);
     } catch (error) { 
