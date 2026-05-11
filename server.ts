@@ -57,7 +57,7 @@ async function startServer() {
       const { text, from, to } = req.body;
       const response = await callOpenRouter(
         [{ role: "user", content: `Translate from ${from} to ${to}: "${text}". Provide only the translation.` }],
-        "meta-llama/llama-2-70b-chat"
+        "anthropic/claude-3.5-sonnet"
       );
       res.json({ text: response });
     } catch (error) {
@@ -82,7 +82,7 @@ Return ONLY valid JSON, no markdown, no explanation text before or after.`;
 
       const response = await callOpenRouter(
         [{ role: "user", content: prompt }],
-        "meta-llama/llama-2-70b-chat"
+        "anthropic/claude-3.5-sonnet"
       );
 
       const jsonMatch = response.match(/\{[\s\S]*\}/);
@@ -96,8 +96,8 @@ Return ONLY valid JSON, no markdown, no explanation text before or after.`;
       res.json(parsed);
     } catch (error) {
       console.error("Server Analysis Error:", error);
-      res.status(500).json({ 
-        translation: "Хатогӣ", 
+      res.status(500).json({
+        translation: "Хатогӣ",
         explanation: "Analysis failed",
         examples: [],
         synonyms: [],
@@ -120,7 +120,7 @@ Return ONLY valid JSON, no markdown, no explanation text before or after.`;
 
       const response = await callOpenRouter(
         messages as any[],
-        "meta-llama/llama-2-70b-chat",
+        "anthropic/claude-3.5-sonnet",
         systemPrompt
       );
 
@@ -134,21 +134,21 @@ Return ONLY valid JSON, no markdown, no explanation text before or after.`;
   app.post("/api/ai/morphology", async (req, res) => {
     try {
       const { word } = req.body;
-      const prompt = `Analyze the Tajik word: "${word}". 
+      const prompt = `Analyze the Tajik word: "${word}".
 Return JSON with: root, suffixes, base, part_of_speech, meaning.
 Return ONLY valid JSON.`;
 
       const response = await callOpenRouter(
         [{ role: "user", content: prompt }],
-        "meta-llama/llama-2-70b-chat"
+        "anthropic/claude-3.5-sonnet"
       );
 
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
       res.json(parsed);
-    } catch (error) { 
+    } catch (error) {
       console.error("Morphology error:", error);
-      res.status(500).json({ error: "Morphology failed" }); 
+      res.status(500).json({ error: "Morphology failed" });
     }
   });
 
@@ -161,15 +161,15 @@ Return ONLY valid JSON.`;
 
       const response = await callOpenRouter(
         [{ role: "user", content: prompt }],
-        "meta-llama/llama-2-70b-chat"
+        "anthropic/claude-3.5-sonnet"
       );
 
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { errors: [], score: 100 };
       res.json(parsed);
-    } catch (error) { 
+    } catch (error) {
       console.error("Spelling error:", error);
-      res.status(500).json({ error: "Spelling failed" }); 
+      res.status(500).json({ error: "Spelling failed" });
     }
   });
 
@@ -183,15 +183,15 @@ Return ONLY valid JSON.`;
 
       const response = await callOpenRouter(
         [{ role: "user", content: prompt }],
-        "meta-llama/llama-2-70b-chat"
+        "anthropic/claude-3.5-sonnet"
       );
 
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { entries: [] };
       res.json(parsed);
-    } catch (error) { 
+    } catch (error) {
       console.error("Parse dict error:", error);
-      res.status(500).json({ error: "Parsing failed" }); 
+      res.status(500).json({ error: "Parsing failed" });
     }
   });
 
@@ -204,7 +204,7 @@ Return ONLY valid JSON.`;
 
       const response = await callOpenRouter(
         [{ role: "user", content: prompt }],
-        "meta-llama/llama-2-70b-chat"
+        "anthropic/claude-3.5-sonnet"
       );
 
       const jsonMatch = response.match(/\{[\s\S]*\}/);
