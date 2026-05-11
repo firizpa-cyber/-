@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import Groq from "groq-sdk";
+import { HfInference } from "@huggingface/inference";
 import { createServer as createViteServer } from "vite";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,29 +14,27 @@ async function startServer() {
   app.use(express.json());
 
   // AI Service logic on backend
-  let groqInstance: Groq | null = null;
-  function getGroq() {
-    if (!groqInstance) {
-      const apiKey = process.env.GROQ_API_KEY;
-      if (!apiKey) throw new Error("GROQ_API_KEY is not set.");
-      groqInstance = new Groq({ apiKey });
+  let hfInstance: HfInference | null = null;
+  function getHF() {
+    if (!hfInstance) {
+      const apiKey = process.env.HUGGING_FACE_API_KEY;
+      if (!apiKey) throw new Error("HUGGING_FACE_API_KEY is not set.");
+      hfInstance = new HfInference(apiKey);
     }
-    return groqInstance;
+    return hfInstance;
   }
 
   // API Routes
   app.post("/api/ai/translate", async (req, res) => {
     try {
       const { text, from, to } = req.body;
-      const groq = getGroq();
-      const response = await groq.chat.completions.create({
-        model: "mixtral-8x7b-32768",
-        messages: [{ role: "user", content: `Translate from ${from} to ${to}: "${text}". Provide only the translation.` }],
-        max_tokens: 500,
-        temperature: 0.3,
+      const hf = getHF();
+      const result = await hf.translation({
+        model: "Helsinki-NLP/opus-mt-mul-en",
+        inputs: text
       });
-      const content = response.choices[0].message.content || "Хатогӣ дар тарҷума";
-      res.json({ text: content });
+      const translatedText = Array.isArray(result) ? result[0].translation_text : result.translation_text;
+      res.json({ text: translatedText });
     } catch (error) {
       console.error("Server Translation Error:", error);
       res.status(500).json({ text: "Хатогӣ дар тарҷума", error: String(error) });
@@ -46,26 +44,38 @@ async function startServer() {
   app.post("/api/ai/analysis", async (req, res) => {
     try {
       const { text, from, to } = req.body;
-      const groq = getGroq();
-      const response = await groq.chat.completions.create({
-        model: "mixtral-8x7b-32768",
-        messages: [{
-          role: "user",
-          content: `You are a language expert. Translate and analyze deeply.
+      const hf = getHF();
+      
+      const prompt = `You are a language expert. Translate and analyze deeply.
 Translate from ${from} to ${to}: "${text}"
 Provide JSON response with:
 - translation: main translation
 - explanation: grammatical or semantic explanation
-- examples: usage examples (array)
-- synonyms: synonyms (array)
+- examples: usage examples (array, max 2)
+- synonyms: synonyms (array, max 3)
 - culturalContext: cultural notes (string)
-Return ONLY valid JSON, no extra text.`
-        }],
-        max_tokens: 1500,
-        temperature: 0.5,
+
+Return ONLY valid JSON, no extra text. No markdown formatting.`;
+
+      const result = await hf.textGeneration({
+        model: "mistralai/Mistral-7B-Instruct-v0.1",
+        inputs: prompt,
+        parameters: {
+          max_new_tokens: 500,
+          temperature: 0.5,
+          top_p: 0.9
+        }
       });
-      const content = response.choices[0].message.content || "{}";
-      const parsed = JSON.parse(content);
+
+      const content = result.generated_text.replace(prompt, "").trim();
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {
+        translation: content.substring(0, 100),
+        explanation: "Analysis provided",
+        examples: [],
+        synonyms: [],
+        culturalContext: ""
+      };
       res.json(parsed);
     } catch (error) {
       console.error("Server Analysis Error:", error);
@@ -82,23 +92,31 @@ Return ONLY valid JSON, no extra text.`
   app.post("/api/ai/assistant", async (req, res) => {
     try {
       const { message, history } = req.body;
-      const groq = getGroq();
+      const hf = getHF();
 
-      const messages = history.map((h: any) => ({
-        role: h.role === 'model' || h.role === 'assistant' ? 'assistant' : 'user' as const,
-        content: h.content || h.parts?.[0]?.text || ''
-      }));
-      messages.push({ role: 'user' as const, content: message });
+      const conversationText = history.map((h: any) => {
+        const content = h.content || h.parts?.[0]?.text || '';
+        const role = h.role === 'model' || h.role === 'assistant' ? 'Assistant' : 'User';
+        return `${role}: ${content}`;
+      }).join('\n');
 
-      const response = await groq.chat.completions.create({
-        model: "mixtral-8x7b-32768",
-        messages,
-        system: `You are "Хирад" - an extremely intelligent, thoughtful AI assistant specializing in languages and linguistics. You think deeply, provide accurate analysis, and explain complex concepts clearly. Respond in Tajik when appropriate.`,
-        max_tokens: 2000,
-        temperature: 0.7,
+      const prompt = `You are "Хирад" - an extremely intelligent, thoughtful AI assistant specializing in languages and linguistics. You think deeply, provide accurate analysis, and explain complex concepts clearly. Respond in Tajik when appropriate.
+
+${conversationText}
+User: ${message}
+Assistant:`;
+
+      const result = await hf.textGeneration({
+        model: "mistralai/Mistral-7B-Instruct-v0.1",
+        inputs: prompt,
+        parameters: {
+          max_new_tokens: 800,
+          temperature: 0.7,
+          top_p: 0.95
+        }
       });
 
-      const content = response.choices[0].message.content || "Бубахшед, ман ҷавоб дода натавонистам.";
+      const content = result.generated_text.split('Assistant:').pop()?.trim() || "Бубахшед, ман ҷавоб дода натавонистам.";
       res.json({ text: content });
     } catch (error) {
       console.error("Server Assistant Error:", error);
@@ -109,20 +127,23 @@ Return ONLY valid JSON, no extra text.`
   app.post("/api/ai/morphology", async (req, res) => {
     try {
       const { word } = req.body;
-      const groq = getGroq();
-      const response = await groq.chat.completions.create({
-        model: "mixtral-8x7b-32768",
-        messages: [{
-          role: "user",
-          content: `Analyze the Tajik word: "${word}". 
+      const hf = getHF();
+      const prompt = `Analyze the Tajik word: "${word}". 
 Return JSON with: root, suffixes, base, part_of_speech, meaning.
-Return ONLY valid JSON.`
-        }],
-        max_tokens: 500,
-        temperature: 0.3,
+Return ONLY valid JSON, no markdown.`;
+
+      const result = await hf.textGeneration({
+        model: "mistralai/Mistral-7B-Instruct-v0.1",
+        inputs: prompt,
+        parameters: {
+          max_new_tokens: 300,
+          temperature: 0.3
+        }
       });
-      const content = response.choices[0].message.content || "{}";
-      const parsed = JSON.parse(content);
+      
+      const content = result.generated_text.replace(prompt, "").trim();
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
       res.json(parsed);
     } catch (error) { 
       console.error("Morphology error:", error);
@@ -133,20 +154,23 @@ Return ONLY valid JSON.`
   app.post("/api/ai/spelling", async (req, res) => {
     try {
       const { text } = req.body;
-      const groq = getGroq();
-      const response = await groq.chat.completions.create({
-        model: "mixtral-8x7b-32768",
-        messages: [{
-          role: "user",
-          content: `Check spelling and grammar for this Tajik text: "${text}".
+      const hf = getHF();
+      const prompt = `Check spelling and grammar for this Tajik text: "${text}".
 Return JSON with: errors (array of {word, correction, reason}), score (0-100).
-Return ONLY valid JSON.`
-        }],
-        max_tokens: 800,
-        temperature: 0.2,
+Return ONLY valid JSON, no markdown.`;
+
+      const result = await hf.textGeneration({
+        model: "mistralai/Mistral-7B-Instruct-v0.1",
+        inputs: prompt,
+        parameters: {
+          max_new_tokens: 400,
+          temperature: 0.2
+        }
       });
-      const content = response.choices[0].message.content || "{}";
-      const parsed = JSON.parse(content);
+      
+      const content = result.generated_text.replace(prompt, "").trim();
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { errors: [], score: 100 };
       res.json(parsed);
     } catch (error) { 
       console.error("Spelling error:", error);
@@ -157,21 +181,24 @@ Return ONLY valid JSON.`
   app.post("/api/ai/parse-dict", async (req, res) => {
     try {
       const { sources } = req.body;
-      const groq = getGroq();
-      const context = sources.map((s:any) => `FILE: ${s.name}\nCONTENT:\n${s.content.substring(0, 5000)}`).join('\n\n');
-      const response = await groq.chat.completions.create({
-        model: "mixtral-8x7b-32768",
-        messages: [{
-          role: "user",
-          content: `Extract dictionary entries from these files:\n${context}
+      const hf = getHF();
+      const context = sources.map((s:any) => `FILE: ${s.name}\nCONTENT:\n${s.content.substring(0, 3000)}`).join('\n\n');
+      const prompt = `Extract dictionary entries from these files:\n${context}
 Return JSON with: entries (array of {word, definition, examples, pos}).
-Return ONLY valid JSON.`
-        }],
-        max_tokens: 2000,
-        temperature: 0.3,
+Return ONLY valid JSON, no markdown.`;
+
+      const result = await hf.textGeneration({
+        model: "mistralai/Mistral-7B-Instruct-v0.1",
+        inputs: prompt,
+        parameters: {
+          max_new_tokens: 1000,
+          temperature: 0.3
+        }
       });
-      const content = response.choices[0].message.content || "{}";
-      const parsed = JSON.parse(content);
+      
+      const content = result.generated_text.replace(prompt, "").trim();
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { entries: [] };
       res.json(parsed);
     } catch (error) { 
       console.error("Parse dict error:", error);
@@ -182,20 +209,23 @@ Return ONLY valid JSON.`
   app.post("/api/ai/academic", async (req, res) => {
     try {
       const { word } = req.body;
-      const groq = getGroq();
-      const response = await groq.chat.completions.create({
-        model: "mixtral-8x7b-32768",
-        messages: [{
-          role: "user",
-          content: `Find academic definition for Tajik word: "${word}".
-Return JSON with: definition, etymology, examples (array), synonyms (array), source.
-Return ONLY valid JSON.`
-        }],
-        max_tokens: 1000,
-        temperature: 0.4,
+      const hf = getHF();
+      const prompt = `Find academic definition for Tajik word: "${word}".
+Return JSON with: definition, etymology, examples (array, max 2), synonyms (array, max 3), source.
+Return ONLY valid JSON, no markdown.`;
+
+      const result = await hf.textGeneration({
+        model: "mistralai/Mistral-7B-Instruct-v0.1",
+        inputs: prompt,
+        parameters: {
+          max_new_tokens: 600,
+          temperature: 0.4
+        }
       });
-      const content = response.choices[0].message.content || "{}";
-      const parsed = JSON.parse(content);
+      
+      const content = result.generated_text.replace(prompt, "").trim();
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
       res.json(parsed);
     } catch (error) { 
       console.error("Academic error:", error);
