@@ -15,6 +15,8 @@ import { PRESETS, importFromUrl } from '@/src/db/seed';
 export default function Import({ theme, toggleTheme }: { theme?: string, toggleTheme?: () => void }) {
   const [status, setStatus] = useState<{ type: 'idle' | 'loading' | 'success' | 'error', message: string }>({ type: 'idle', message: '' });
   const [stats, setStats] = useState({ total: 0 });
+  const [progress, setProgress] = useState(0);
+  const [totalDataSize, setTotalDataSize] = useState(0);
 
   const [isConfirmingClear, setIsConfirmingClear] = useState(false);
   const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
@@ -106,15 +108,20 @@ export default function Import({ theme, toggleTheme }: { theme?: string, toggleT
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
+    const totalSize = Array.from(files).reduce((sum, f) => sum + f.size, 0);
+    setTotalDataSize(totalSize);
+    setProgress(0);
+
     setStatus({ type: 'loading', message: files.length > 1 ? `Коркарди ${files.length} файл...` : `Файли "${files[0].name}" коркард мешавад...` });
 
     try {
       const sources: { name: string, content: string }[] = [];
       let finalEntries: any[] = [];
+      let processedSize = 0;
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        
+
         const content = await new Promise<string | ArrayBuffer>((resolve) => {
           const reader = new FileReader();
           reader.onload = (event) => resolve(event.target?.result as any);
@@ -125,16 +132,22 @@ export default function Import({ theme, toggleTheme }: { theme?: string, toggleT
           }
         });
 
+        processedSize += file.size;
+        const currentProgress = totalSize > 0 ? Math.floor((processedSize / totalSize) * 100) : 0;
+        setProgress(currentProgress);
+
         if (file.name.endsWith('.pdf')) {
           setStatus({ type: 'loading', message: `Ихроҷи матн аз PDF: 0%` });
           const text = await extractTextFromPDF(content as ArrayBuffer, (p) => {
+            const overallProgress = totalSize > 0 ? Math.floor(((processedSize - file.size) / totalSize) * 100 + (p / 100) * (file.size / totalSize) * 100) : p;
+            setProgress(overallProgress);
             setStatus(prev => ({ ...prev, message: `Ихроҷи матн аз PDF: ${p}%` }));
           });
           sources.push({ name: file.name, content: text });
         } else if (typeof content === 'string') {
-          sources.push({ 
-            name: file.name, 
-            content: content 
+          sources.push({
+            name: file.name,
+            content: content
           });
         }
       }
@@ -427,24 +440,64 @@ export default function Import({ theme, toggleTheme }: { theme?: string, toggleT
 
             <AnimatePresence>
               {status.type !== 'idle' && (
-                <motion.div 
+                <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
                   className={cn(
-                    "p-6 rounded-[2rem] flex items-center gap-4 border",
+                    "p-6 rounded-[2rem] border overflow-hidden",
                     status.type === 'loading' && "bg-slate-900 text-white border-slate-800 shadow-2xl shadow-slate-900/20",
-                    status.type === 'success' && "bg-emerald-50 text-emerald-700 border-emerald-100",
-                    status.type === 'error' && "bg-red-50 text-red-700 border-red-100"
+                    status.type === 'success' && "bg-emerald-50 text-emerald-700 border-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300",
+                    status.type === 'error' && "bg-red-50 text-red-700 border-red-100 dark:bg-red-900/20 dark:text-red-300"
                   )}
                 >
-                  {status.type === 'loading' && <Sparkles className="animate-spin text-emerald-400" size={24} />}
-                  {status.type === 'success' && <CheckCircle2 size={24} />}
-                  {status.type === 'error' && <AlertCircle size={24} />}
-                  <div className="flex-1">
-                    <p className="text-sm font-black leading-tight">{status.message}</p>
-                    {isAiAnalyzing && <p className="text-[9px] opacity-60 uppercase tracking-widest mt-1">ИИ маводро таҳлил мекунад...</p>}
+                  <div className="flex items-center gap-4 mb-4">
+                    {status.type === 'loading' && <Sparkles className="animate-spin text-emerald-400" size={24} />}
+                    {status.type === 'success' && <CheckCircle2 size={24} />}
+                    {status.type === 'error' && <AlertCircle size={24} />}
+                    <div className="flex-1">
+                      <p className="text-sm font-black leading-tight">{status.message}</p>
+                      {isAiAnalyzing && <p className="text-[9px] opacity-60 uppercase tracking-widest mt-1">ИИ маводро таҳлил мекунад...</p>}
+                    </div>
                   </div>
+
+                  {status.type === 'loading' && totalDataSize > 0 && (
+                    <motion.div
+                      initial={{ opacity: 0, scaleY: 0 }}
+                      animate={{ opacity: 1, scaleY: 1 }}
+                      className="mt-4 space-y-2 origin-top"
+                    >
+                      <div className="flex justify-between items-center text-[10px]">
+                        <span className="uppercase tracking-widest font-bold opacity-70">Фарағат гирифтан:</span>
+                        <span className="font-black">{progress}%</span>
+                      </div>
+                      <div className="relative h-3 bg-slate-800 rounded-full overflow-hidden">
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{ width: `${progress}%` }}
+                          transition={{ duration: totalDataSize > 100000 ? 0.8 : 0.3 }}
+                          className="h-full bg-gradient-to-r from-emerald-400 to-teal-400 rounded-full shadow-lg shadow-emerald-400/50"
+                        />
+                        {progress < 100 && (
+                          <motion.div
+                            animate={{
+                              opacity: [0.5, 1, 0.5]
+                            }}
+                            transition={{
+                              duration: 1.5,
+                              repeat: Infinity
+                            }}
+                            className="absolute inset-0 bg-gradient-to-r from-transparent via-white to-transparent opacity-30"
+                          />
+                        )}
+                      </div>
+                      {totalDataSize > 0 && (
+                        <p className="text-[9px] opacity-60 uppercase tracking-widest">
+                          {Math.round(totalDataSize / 1024 / 1024 * (progress / 100))} МБ / {Math.round(totalDataSize / 1024 / 1024)} МБ
+                        </p>
+                      )}
+                    </motion.div>
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>
