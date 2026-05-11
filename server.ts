@@ -1,8 +1,10 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createServer as createViteServer } from "vite";
+import dotenv from "dotenv";
+
+dotenv.config({ path: ".env.local" });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,25 +15,51 @@ async function startServer() {
 
   app.use(express.json());
 
-  // AI Service logic on backend
-  let aiInstance: GoogleGenerativeAI | null = null;
-  function getAI() {
-    if (!aiInstance) {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error("GEMINI_API_KEY is not set.");
-      aiInstance = new GoogleGenerativeAI(apiKey);
+  // OpenRouter API helper
+  async function callOpenRouter(messages: any[], model: string, systemPrompt?: string) {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set.");
+
+    const payload: any = {
+      model,
+      messages,
+      temperature: 0.7,
+      max_tokens: 1500,
+    };
+
+    if (systemPrompt) {
+      payload.system = systemPrompt;
     }
-    return aiInstance;
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": "http://localhost:3000",
+        "X-Title": "Language Assistant"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OpenRouter error: ${response.status} - ${error}`);
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
   }
 
   // API Routes
   app.post("/api/ai/translate", async (req, res) => {
     try {
       const { text, from, to } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
-      const response = await model.generateContent(`Translate from ${from} to ${to}: "${text}". Provide only the translation.`);
-      res.json({ text: response.response.text() });
+      const response = await callOpenRouter(
+        [{ role: "user", content: `Translate from ${from} to ${to}: "${text}". Provide only the translation.` }],
+        "openrouter/auto"
+      );
+      res.json({ text: response });
     } catch (error) {
       console.error("Server Translation Error:", error);
       res.status(500).json({ text: "Хатогӣ дар тарҷума", error: String(error) });
@@ -41,28 +69,36 @@ async function startServer() {
   app.post("/api/ai/analysis", async (req, res) => {
     try {
       const { text, from, to } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ 
-        model: "gemini-1.5-flash",
-        generationConfig: { responseMimeType: "application/json" }
-      });
-      const prompt = `Шумо "Хирад" ҳастед, коршиноси забонҳо. 
-      Матни зеринро аз ${from} ба ${to} тарҷума кунед ва сипас таҳлили амиқ диҳед:
-      Матн: "${text}"
-      Ҷавоби шумо бояд дар формати JSON бошад бо ин майдонҳо:
-      - translation: тарҷумаи асосӣ
-      - explanation: шарҳи муфассали грамматикӣ ё маъноӣ
-      - examples: намунаҳои истифода (массив)
-      - synonyms: синонимҳо (массив)
-      - culturalContext: шарҳи кӯтоҳ дар бораи истифодаи ин калима ё ҷумла дар фарҳанг`;
-      
-      const response = await model.generateContent(prompt);
-      res.json(JSON.parse(response.response.text()));
+      const prompt = `You are a language expert. Translate and analyze deeply.
+Translate from ${from} to ${to}: "${text}"
+Provide JSON response with:
+- translation: main translation
+- explanation: grammatical or semantic explanation
+- examples: usage examples (array, max 2)
+- synonyms: synonyms (array, max 3)
+- culturalContext: cultural notes (string)
+
+Return ONLY valid JSON, no markdown, no explanation text before or after.`;
+
+      const response = await callOpenRouter(
+        [{ role: "user", content: prompt }],
+        "openrouter/auto"
+      );
+
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {
+        translation: text,
+        explanation: response,
+        examples: [],
+        synonyms: [],
+        culturalContext: ""
+      };
+      res.json(parsed);
     } catch (error) {
       console.error("Server Analysis Error:", error);
-      res.status(500).json({ 
-        translation: "Хатогӣ", 
-        explanation: "Дарёфти шарҳ имконнопазир шуд",
+      res.status(500).json({
+        translation: "Хатогӣ",
+        explanation: "Analysis failed",
         examples: [],
         synonyms: [],
         culturalContext: ""
@@ -73,21 +109,22 @@ async function startServer() {
   app.post("/api/ai/assistant", async (req, res) => {
     try {
       const { message, history } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ 
-        model: "gemini-1.5-flash",
-        systemInstruction: `Шумо "Хирад" ҳастед - ассистенти зеҳни сунъии ниҳоят донишманд...`
-      });
 
-      const chat = model.startChat({
-        history: history.map((h: any) => ({
-          role: h.role === 'model' || h.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: h.content || h.parts?.[0]?.text || '' }]
-        }))
-      });
+      const messages = history.map((h: any) => ({
+        role: h.role === 'model' || h.role === 'assistant' ? 'assistant' : 'user' as const,
+        content: h.content || h.parts?.[0]?.text || ''
+      }));
+      messages.push({ role: 'user' as const, content: message });
 
-      const response = await chat.sendMessage(message);
-      res.json({ text: response.response.text() });
+      const systemPrompt = `You are "Хирад" - a highly intelligent AI assistant specializing in Tajik language and linguistics. YOU MUST ALWAYS RESPOND IN TAJIK LANGUAGE. Never respond in English or other languages unless explicitly asked. Think deeply, provide accurate analysis, and explain complex concepts clearly. Be concise but thorough. Ҳамеша дар забони тоҷикӣ ҷавоб диҳед.`;
+
+      const response = await callOpenRouter(
+        messages as any[],
+        "openrouter/auto",
+        systemPrompt
+      );
+
+      res.json({ text: response });
     } catch (error) {
       console.error("Server Assistant Error:", error);
       res.status(500).json({ text: "Бубахшед, мушкили техникӣ пеш омад.", error: String(error) });
@@ -97,46 +134,86 @@ async function startServer() {
   app.post("/api/ai/morphology", async (req, res) => {
     try {
       const { word } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash", generationConfig: { responseMimeType: "application/json" } });
-      const prompt = `Analyze the Tajik word: "${word}". System: Tajik linguistics expert specializing in morphology. Return data about root, suffixes, base, and part of speech.`;
-      const response = await model.generateContent(prompt);
-      res.json(JSON.parse(response.response.text()));
-    } catch (error) { res.status(500).json({ error: "Morphology failed" }); }
+      const prompt = `Analyze the Tajik word: "${word}".
+Return JSON with: root, suffixes, base, part_of_speech, meaning.
+Return ONLY valid JSON.`;
+
+      const response = await callOpenRouter(
+        [{ role: "user", content: prompt }],
+        "openrouter/auto"
+      );
+
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+      res.json(parsed);
+    } catch (error) {
+      console.error("Morphology error:", error);
+      res.status(500).json({ error: "Morphology failed" });
+    }
   });
 
   app.post("/api/ai/spelling", async (req, res) => {
     try {
       const { text } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash", generationConfig: { responseMimeType: "application/json" } });
-      const prompt = `Check spelling and grammar for this Tajik text: "${text}". System: Professional Tajik editor.`;
-      const response = await model.generateContent(prompt);
-      res.json(JSON.parse(response.response.text()));
-    } catch (error) { res.status(500).json({ error: "Spelling failed" }); }
+      const prompt = `Check spelling and grammar for this Tajik text: "${text}".
+Return JSON with: errors (array of {word, correction, reason}), score (0-100).
+Return ONLY valid JSON.`;
+
+      const response = await callOpenRouter(
+        [{ role: "user", content: prompt }],
+        "openrouter/auto"
+      );
+
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { errors: [], score: 100 };
+      res.json(parsed);
+    } catch (error) {
+      console.error("Spelling error:", error);
+      res.status(500).json({ error: "Spelling failed" });
+    }
   });
 
   app.post("/api/ai/parse-dict", async (req, res) => {
     try {
       const { sources } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash", generationConfig: { responseMimeType: "application/json" } });
-      const context = sources.map((s:any) => `FILE: ${s.name}\nCONTENT:\n${s.content.substring(0, 10000)}`).join('\n\n');
-      const prompt = `Extract dictionary entries from these files:\n${context}`;
-      const response = await model.generateContent(prompt);
-      res.json(JSON.parse(response.response.text()));
-    } catch (error) { res.status(500).json({ error: "Parsing failed" }); }
+      const context = sources.map((s:any) => `FILE: ${s.name}\nCONTENT:\n${s.content.substring(0, 3000)}`).join('\n\n');
+      const prompt = `Extract dictionary entries from these files:\n${context}
+Return JSON with: entries (array of {word, definition, examples, pos}).
+Return ONLY valid JSON.`;
+
+      const response = await callOpenRouter(
+        [{ role: "user", content: prompt }],
+        "openrouter/auto"
+      );
+
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { entries: [] };
+      res.json(parsed);
+    } catch (error) {
+      console.error("Parse dict error:", error);
+      res.status(500).json({ error: "Parsing failed" });
+    }
   });
 
   app.post("/api/ai/academic", async (req, res) => {
     try {
       const { word } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash", generationConfig: { responseMimeType: "application/json" } });
-      const prompt = `Ҷустуҷӯи калимаи академикӣ: "${word}". System: Tajik linguistics expert. Return definition, etymology, examples, synonyms.`;
-      const response = await model.generateContent(prompt);
-      res.json(JSON.parse(response.response.text()));
-    } catch (error) { res.status(500).json({ error: "Academic search failed" }); }
+      const prompt = `Find academic definition for Tajik word: "${word}".
+Return JSON with: definition, etymology, examples (array, max 2), synonyms (array, max 3), source.
+Return ONLY valid JSON.`;
+
+      const response = await callOpenRouter(
+        [{ role: "user", content: prompt }],
+        "openrouter/auto"
+      );
+
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+      res.json(parsed);
+    } catch (error) { 
+      console.error("Academic error:", error);
+      res.status(500).json({ error: "Academic search failed" }); 
+    }
   });
 
   // Vite integration

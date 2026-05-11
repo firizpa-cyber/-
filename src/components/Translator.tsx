@@ -21,21 +21,46 @@ export default function Translator() {
     'Тоҷикӣ', 'English', 'Русский', 'Deutsch', 'Français', 'Türkçe', 'العربية', 'Ўзбекча', '中文', '日本語'
   ];
 
+  const langMap: { [key: string]: string } = {
+    'Тоҷикӣ': 'tg-TJ',
+    'English': 'en-US',
+    'Русский': 'ru-RU',
+    'Deutsch': 'de-DE',
+    'Français': 'fr-FR',
+    'Türkçe': 'tr-TR',
+    'العربية': 'ar-SA',
+    'Ўзбекча': 'uz-UZ',
+    '中文': 'zh-CN',
+    '日本語': 'ja-JP'
+  };
+
   const setupRecognition = () => {
     const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
     if (SpeechRecognition) {
       const recognition = new SpeechRecognition();
       recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = sourceLang === 'Тоҷикӣ' ? 'tg-TJ' : 'en-US'; // basic logic, can be improved
+      recognition.interimResults = true;
+      recognition.lang = langMap[sourceLang] || 'en-US';
 
-      recognition.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        setInputText(transcript);
-        setIsListening(false);
+      recognition.onstart = () => {
+        setIsListening(true);
       };
 
-      recognition.onerror = () => setIsListening(false);
+      recognition.onresult = (event: any) => {
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript;
+        }
+        setInputText(prev => prev + (transcript ? ' ' : '') + transcript);
+        if (event.isFinal) {
+          setIsListening(false);
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        setIsListening(false);
+      };
       recognition.onend = () => setIsListening(false);
       recognitionRef.current = recognition;
     }
@@ -44,9 +69,9 @@ export default function Translator() {
   const toggleListen = () => {
     if (isListening) {
       recognitionRef.current?.stop();
+      setIsListening(false);
     } else {
-      if (!recognitionRef.current) setupRecognition();
-      setIsListening(true);
+      setupRecognition();
       recognitionRef.current?.start();
     }
   };
@@ -88,6 +113,9 @@ export default function Translator() {
 
   const speak = (text: string) => {
     const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = langMap[targetLang] || 'en-US';
+    utterance.rate = 0.9;
+    utterance.pitch = 1.0;
     window.speechSynthesis.speak(utterance);
   };
 
