@@ -57,7 +57,7 @@ async function startServer() {
       const { text, from, to } = req.body;
       const response = await callOpenRouter(
         [{ role: "user", content: `Translate from ${from} to ${to}: "${text}". Provide only the translation.` }],
-        "anthropic/claude-3.5-sonnet"
+        "anthropic/claude-3-sonnet"
       );
       res.json({ text: response });
     } catch (error) {
@@ -82,7 +82,7 @@ Return ONLY valid JSON, no markdown, no explanation text before or after.`;
 
       const response = await callOpenRouter(
         [{ role: "user", content: prompt }],
-        "anthropic/claude-3.5-sonnet"
+        "anthropic/claude-3-sonnet"
       );
 
       const jsonMatch = response.match(/\{[\s\S]*\}/);
@@ -120,7 +120,7 @@ Return ONLY valid JSON, no markdown, no explanation text before or after.`;
 
       const response = await callOpenRouter(
         messages as any[],
-        "anthropic/claude-3.5-sonnet",
+        "anthropic/claude-3-sonnet",
         systemPrompt
       );
 
@@ -140,7 +140,7 @@ Return ONLY valid JSON.`;
 
       const response = await callOpenRouter(
         [{ role: "user", content: prompt }],
-        "anthropic/claude-3.5-sonnet"
+        "anthropic/claude-3-sonnet"
       );
 
       const jsonMatch = response.match(/\{[\s\S]*\}/);
@@ -161,7 +161,7 @@ Return ONLY valid JSON.`;
 
       const response = await callOpenRouter(
         [{ role: "user", content: prompt }],
-        "anthropic/claude-3.5-sonnet"
+        "anthropic/claude-3-sonnet"
       );
 
       const jsonMatch = response.match(/\{[\s\S]*\}/);
@@ -183,7 +183,7 @@ Return ONLY valid JSON.`;
 
       const response = await callOpenRouter(
         [{ role: "user", content: prompt }],
-        "anthropic/claude-3.5-sonnet"
+        "anthropic/claude-3-sonnet"
       );
 
       const jsonMatch = response.match(/\{[\s\S]*\}/);
@@ -204,7 +204,7 @@ Return ONLY valid JSON.`;
 
       const response = await callOpenRouter(
         [{ role: "user", content: prompt }],
-        "anthropic/claude-3.5-sonnet"
+        "anthropic/claude-3-sonnet"
       );
 
       const jsonMatch = response.match(/\{[\s\S]*\}/);
