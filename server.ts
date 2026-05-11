@@ -116,7 +116,7 @@ Return ONLY valid JSON, no markdown, no explanation text before or after.`;
       }));
       messages.push({ role: 'user' as const, content: message });
 
-      const systemPrompt = `You are "Хирад" - an extremely intelligent, thoughtful AI assistant specializing in languages and linguistics. You think deeply, provide accurate analysis, and explain complex concepts clearly. Respond in Tajik when appropriate. Be concise but thorough.`;
+      const systemPrompt = `You are "Хирад" - a highly intelligent AI assistant specializing in Tajik language and linguistics. YOU MUST ALWAYS RESPOND IN TAJIK LANGUAGE. Never respond in English or other languages unless explicitly asked. Think deeply, provide accurate analysis, and explain complex concepts clearly. Be concise but thorough. Ҳамеша дар забони тоҷикӣ ҷавоб диҳед.`;
 
       const response = await callOpenRouter(
         messages as any[],
