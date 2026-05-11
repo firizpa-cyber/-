@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 import { createServer as createViteServer } from "vite";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,24 +14,29 @@ async function startServer() {
   app.use(express.json());
 
   // AI Service logic on backend
-  let aiInstance: GoogleGenerativeAI | null = null;
-  function getAI() {
-    if (!aiInstance) {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error("GEMINI_API_KEY is not set.");
-      aiInstance = new GoogleGenerativeAI(apiKey);
+  let groqInstance: Groq | null = null;
+  function getGroq() {
+    if (!groqInstance) {
+      const apiKey = process.env.GROQ_API_KEY;
+      if (!apiKey) throw new Error("GROQ_API_KEY is not set.");
+      groqInstance = new Groq({ apiKey });
     }
-    return aiInstance;
+    return groqInstance;
   }
 
   // API Routes
   app.post("/api/ai/translate", async (req, res) => {
     try {
       const { text, from, to } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
-      const response = await model.generateContent(`Translate from ${from} to ${to}: "${text}". Provide only the translation.`);
-      res.json({ text: response.response.text() });
+      const groq = getGroq();
+      const response = await groq.chat.completions.create({
+        model: "mixtral-8x7b-32768",
+        messages: [{ role: "user", content: `Translate from ${from} to ${to}: "${text}". Provide only the translation.` }],
+        max_tokens: 500,
+        temperature: 0.3,
+      });
+      const content = response.choices[0].message.content || "Хатогӣ дар тарҷума";
+      res.json({ text: content });
     } catch (error) {
       console.error("Server Translation Error:", error);
       res.status(500).json({ text: "Хатогӣ дар тарҷума", error: String(error) });
@@ -41,28 +46,32 @@ async function startServer() {
   app.post("/api/ai/analysis", async (req, res) => {
     try {
       const { text, from, to } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ 
-        model: "gemini-1.5-flash",
-        generationConfig: { responseMimeType: "application/json" }
+      const groq = getGroq();
+      const response = await groq.chat.completions.create({
+        model: "mixtral-8x7b-32768",
+        messages: [{
+          role: "user",
+          content: `You are a language expert. Translate and analyze deeply.
+Translate from ${from} to ${to}: "${text}"
+Provide JSON response with:
+- translation: main translation
+- explanation: grammatical or semantic explanation
+- examples: usage examples (array)
+- synonyms: synonyms (array)
+- culturalContext: cultural notes (string)
+Return ONLY valid JSON, no extra text.`
+        }],
+        max_tokens: 1500,
+        temperature: 0.5,
       });
-      const prompt = `Шумо "Хирад" ҳастед, коршиноси забонҳо. 
-      Матни зеринро аз ${from} ба ${to} тарҷума кунед ва сипас таҳлили амиқ диҳед:
-      Матн: "${text}"
-      Ҷавоби шумо бояд дар формати JSON бошад бо ин майдонҳо:
-      - translation: тарҷумаи асосӣ
-      - explanation: шарҳи муфассали грамматикӣ ё маъноӣ
-      - examples: намунаҳои истифода (массив)
-      - synonyms: синонимҳо (массив)
-      - culturalContext: шарҳи кӯтоҳ дар бораи истифодаи ин калима ё ҷумла дар фарҳанг`;
-      
-      const response = await model.generateContent(prompt);
-      res.json(JSON.parse(response.response.text()));
+      const content = response.choices[0].message.content || "{}";
+      const parsed = JSON.parse(content);
+      res.json(parsed);
     } catch (error) {
       console.error("Server Analysis Error:", error);
       res.status(500).json({ 
         translation: "Хатогӣ", 
-        explanation: "Дарёфти шарҳ имконнопазир шуд",
+        explanation: "Analysis failed",
         examples: [],
         synonyms: [],
         culturalContext: ""
@@ -73,21 +82,24 @@ async function startServer() {
   app.post("/api/ai/assistant", async (req, res) => {
     try {
       const { message, history } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ 
-        model: "gemini-1.5-flash",
-        systemInstruction: `Шумо "Хирад" ҳастед - ассистенти зеҳни сунъии ниҳоят донишманд...`
+      const groq = getGroq();
+
+      const messages = history.map((h: any) => ({
+        role: h.role === 'model' || h.role === 'assistant' ? 'assistant' : 'user' as const,
+        content: h.content || h.parts?.[0]?.text || ''
+      }));
+      messages.push({ role: 'user' as const, content: message });
+
+      const response = await groq.chat.completions.create({
+        model: "mixtral-8x7b-32768",
+        messages,
+        system: `You are "Хирад" - an extremely intelligent, thoughtful AI assistant specializing in languages and linguistics. You think deeply, provide accurate analysis, and explain complex concepts clearly. Respond in Tajik when appropriate.`,
+        max_tokens: 2000,
+        temperature: 0.7,
       });
 
-      const chat = model.startChat({
-        history: history.map((h: any) => ({
-          role: h.role === 'model' || h.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: h.content || h.parts?.[0]?.text || '' }]
-        }))
-      });
-
-      const response = await chat.sendMessage(message);
-      res.json({ text: response.response.text() });
+      const content = response.choices[0].message.content || "Бубахшед, ман ҷавоб дода натавонистам.";
+      res.json({ text: content });
     } catch (error) {
       console.error("Server Assistant Error:", error);
       res.status(500).json({ text: "Бубахшед, мушкили техникӣ пеш омад.", error: String(error) });
@@ -97,46 +109,98 @@ async function startServer() {
   app.post("/api/ai/morphology", async (req, res) => {
     try {
       const { word } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash", generationConfig: { responseMimeType: "application/json" } });
-      const prompt = `Analyze the Tajik word: "${word}". System: Tajik linguistics expert specializing in morphology. Return data about root, suffixes, base, and part of speech.`;
-      const response = await model.generateContent(prompt);
-      res.json(JSON.parse(response.response.text()));
-    } catch (error) { res.status(500).json({ error: "Morphology failed" }); }
+      const groq = getGroq();
+      const response = await groq.chat.completions.create({
+        model: "mixtral-8x7b-32768",
+        messages: [{
+          role: "user",
+          content: `Analyze the Tajik word: "${word}". 
+Return JSON with: root, suffixes, base, part_of_speech, meaning.
+Return ONLY valid JSON.`
+        }],
+        max_tokens: 500,
+        temperature: 0.3,
+      });
+      const content = response.choices[0].message.content || "{}";
+      const parsed = JSON.parse(content);
+      res.json(parsed);
+    } catch (error) { 
+      console.error("Morphology error:", error);
+      res.status(500).json({ error: "Morphology failed" }); 
+    }
   });
 
   app.post("/api/ai/spelling", async (req, res) => {
     try {
       const { text } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash", generationConfig: { responseMimeType: "application/json" } });
-      const prompt = `Check spelling and grammar for this Tajik text: "${text}". System: Professional Tajik editor.`;
-      const response = await model.generateContent(prompt);
-      res.json(JSON.parse(response.response.text()));
-    } catch (error) { res.status(500).json({ error: "Spelling failed" }); }
+      const groq = getGroq();
+      const response = await groq.chat.completions.create({
+        model: "mixtral-8x7b-32768",
+        messages: [{
+          role: "user",
+          content: `Check spelling and grammar for this Tajik text: "${text}".
+Return JSON with: errors (array of {word, correction, reason}), score (0-100).
+Return ONLY valid JSON.`
+        }],
+        max_tokens: 800,
+        temperature: 0.2,
+      });
+      const content = response.choices[0].message.content || "{}";
+      const parsed = JSON.parse(content);
+      res.json(parsed);
+    } catch (error) { 
+      console.error("Spelling error:", error);
+      res.status(500).json({ error: "Spelling failed" }); 
+    }
   });
 
   app.post("/api/ai/parse-dict", async (req, res) => {
     try {
       const { sources } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash", generationConfig: { responseMimeType: "application/json" } });
-      const context = sources.map((s:any) => `FILE: ${s.name}\nCONTENT:\n${s.content.substring(0, 10000)}`).join('\n\n');
-      const prompt = `Extract dictionary entries from these files:\n${context}`;
-      const response = await model.generateContent(prompt);
-      res.json(JSON.parse(response.response.text()));
-    } catch (error) { res.status(500).json({ error: "Parsing failed" }); }
+      const groq = getGroq();
+      const context = sources.map((s:any) => `FILE: ${s.name}\nCONTENT:\n${s.content.substring(0, 5000)}`).join('\n\n');
+      const response = await groq.chat.completions.create({
+        model: "mixtral-8x7b-32768",
+        messages: [{
+          role: "user",
+          content: `Extract dictionary entries from these files:\n${context}
+Return JSON with: entries (array of {word, definition, examples, pos}).
+Return ONLY valid JSON.`
+        }],
+        max_tokens: 2000,
+        temperature: 0.3,
+      });
+      const content = response.choices[0].message.content || "{}";
+      const parsed = JSON.parse(content);
+      res.json(parsed);
+    } catch (error) { 
+      console.error("Parse dict error:", error);
+      res.status(500).json({ error: "Parsing failed" }); 
+    }
   });
 
   app.post("/api/ai/academic", async (req, res) => {
     try {
       const { word } = req.body;
-      const ai = getAI();
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash", generationConfig: { responseMimeType: "application/json" } });
-      const prompt = `Ҷустуҷӯи калимаи академикӣ: "${word}". System: Tajik linguistics expert. Return definition, etymology, examples, synonyms.`;
-      const response = await model.generateContent(prompt);
-      res.json(JSON.parse(response.response.text()));
-    } catch (error) { res.status(500).json({ error: "Academic search failed" }); }
+      const groq = getGroq();
+      const response = await groq.chat.completions.create({
+        model: "mixtral-8x7b-32768",
+        messages: [{
+          role: "user",
+          content: `Find academic definition for Tajik word: "${word}".
+Return JSON with: definition, etymology, examples (array), synonyms (array), source.
+Return ONLY valid JSON.`
+        }],
+        max_tokens: 1000,
+        temperature: 0.4,
+      });
+      const content = response.choices[0].message.content || "{}";
+      const parsed = JSON.parse(content);
+      res.json(parsed);
+    } catch (error) { 
+      console.error("Academic error:", error);
+      res.status(500).json({ error: "Academic search failed" }); 
+    }
   });
 
   // Vite integration
